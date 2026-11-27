@@ -72,3 +72,35 @@ fn out_of_range_settings_are_clamped() {
     assert_eq!(p.scale, figcraft_doc::color::PatternPaint::SCALE_RANGE.1);
     assert_eq!(p.spacing, (0.0, figcraft_doc::color::PatternPaint::MAX_SPACING));
 }
+
+#[test]
+fn a_pattern_on_a_character_range_tiles_its_source_layer() {
+    // `type_style` fills go through the same paint reader: the range's pattern must be linked
+    // to its layer, not keep the reader's temporary index as a node id.
+    let fill = json!({"type": "PATTERN", "sourceNodeId": "1:9"});
+    let text = json!({"id": "1:1", "name": "Headline", "type": "TEXT", "relativeTransform": [[1, 0, 0], [0, 1, 0]],
+        "size": {"x": 200, "y": 40}, "characters": "Hello world", "fills": [{"type": "SOLID", "color": {"r": 0, "g": 0, "b": 0, "a": 1}}],
+        "style": {"fontFamily": "Inter", "fontSize": 16},
+        "characterStyleOverrides": [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1], "styleOverrideTable": {"1": {"fills": [fill]}}});
+    let gone = json!({"id": "1:2", "name": "Orphan", "type": "TEXT", "relativeTransform": [[1, 0, 0], [0, 1, 0]],
+        "size": {"x": 200, "y": 40}, "characters": "Hi", "style": {"fontFamily": "Inter", "fontSize": 16},
+        "characterStyleOverrides": [1, 1], "styleOverrideTable": {"1": {"fills": [{"type": "PATTERN", "sourceNodeId": "7:7"}]}}});
+    let v = file(json!([text, gone, layer("1:9", "Tile", json!([]))]));
+    let (doc, warnings) = import(&v, &no_images).unwrap();
+    let NodeKind::Text(t) = &node(&doc, "Headline").kind else { panic!("not a text") };
+    let run = t.runs.iter().find(|r| r.start == 6).expect("the overridden range");
+    match run.style.fills.as_deref().and_then(|f| f.first()).map(|p| &p.kind) {
+        Some(PaintKind::Pattern(p)) => assert_eq!(NodeId(p.source), node(&doc, "Tile").id),
+        other => panic!("the range has no pattern fill: {other:?}"),
+    }
+    let NodeKind::Text(o) = &node(&doc, "Orphan").kind else { panic!("not a text") };
+    assert!(
+        std::iter::once(&o.style)
+            .chain(o.runs.iter().map(|r| &r.style))
+            .filter_map(|s| s.fills.as_ref())
+            .flatten()
+            .all(|p| !matches!(p.kind, PaintKind::Pattern(_))),
+        "a range pattern whose layer is missing is dropped"
+    );
+    assert!(warnings.iter().any(|w| w.contains("tile a layer that wasn't imported")), "{warnings:?}");
+}

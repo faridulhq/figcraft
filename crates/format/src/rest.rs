@@ -1173,6 +1173,7 @@ impl<'a> Ctx<'a> {
             .filter(|n| {
                 n.fills.iter().chain(&n.strokes).any(is_pattern)
                     || matches!(&n.kind, NodeKind::Vector { network } if network.regions.iter().filter_map(|r| r.fills.as_ref()).flatten().any(is_pattern))
+                    || matches!(&n.kind, NodeKind::Text(t) if std::iter::once(&t.style).chain(t.runs.iter().map(|r| &r.style)).filter_map(|s| s.fills.as_ref()).flatten().any(is_pattern))
             })
             .map(|n| n.id)
             .collect();
@@ -1180,10 +1181,19 @@ impl<'a> Ctx<'a> {
             let Some(n) = self.doc.node_mut(id) else { continue };
             link(&mut n.fills);
             link(&mut n.strokes);
-            if let NodeKind::Vector { network } = &mut n.kind {
-                for fills in network.regions.iter_mut().filter_map(|r| r.fills.as_mut()) {
-                    link(fills);
+            match &mut n.kind {
+                NodeKind::Vector { network } => {
+                    for fills in network.regions.iter_mut().filter_map(|r| r.fills.as_mut()) {
+                        link(fills);
+                    }
                 }
+                // A text's own style and its character ranges carry fills too (`type_style`).
+                NodeKind::Text(t) => {
+                    for fills in std::iter::once(&mut t.style).chain(t.runs.iter_mut().map(|r| &mut r.style)).filter_map(|s| s.fills.as_mut()) {
+                        link(fills);
+                    }
+                }
+                _ => {}
             }
         }
         for style in &mut self.doc.styles {
